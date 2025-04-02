@@ -103,6 +103,25 @@ def print_message():
                 st.markdown(message["content"])
 
 
+def delete_tool(tool_name):
+    """
+    도구를 삭제하고 UI를 업데이트합니다.
+    
+    매개변수:
+        tool_name: 삭제할 도구의 이름
+    """
+    # 도구 삭제
+    if tool_name in st.session_state.pending_mcp_config:
+        del st.session_state.pending_mcp_config[tool_name]
+        
+        # 삭제 성공 메시지를 위한 상태 설정
+        st.session_state.tool_deleted = True
+        st.session_state.deleted_tool_name = tool_name
+        
+        # UI를 즉시 새로고침하여 삭제된 도구가 목록에서 사라지게 함
+        st.rerun()
+
+
 def get_streaming_callback(text_placeholder, tool_placeholder):
     """
     스트리밍 콜백 함수를 생성합니다.
@@ -484,6 +503,13 @@ with st.sidebar.expander("MCP 도구 추가", expanded=False):
 
 # --- 등록된 도구 목록 표시 및 삭제 버튼 추가 ---
 with st.sidebar.expander("등록된 도구 목록", expanded=True):
+    # 삭제 성공 메시지 표시
+    if "tool_deleted" in st.session_state and st.session_state.tool_deleted:
+        tool_name = st.session_state.deleted_tool_name
+        st.success(f"{tool_name} 도구가 삭제되었습니다. 적용하려면 '적용하기' 버튼을 눌러주세요.")
+        # 한 번만 표시하도록 상태 초기화
+        st.session_state.tool_deleted = False
+        
     try:
         pending_config = st.session_state.pending_mcp_config
     except Exception as e:
@@ -494,11 +520,7 @@ with st.sidebar.expander("등록된 도구 목록", expanded=True):
             col1, col2 = st.columns([8, 2])
             col1.markdown(f"- **{tool_name}**")
             if col2.button("삭제", key=f"delete_{tool_name}"):
-                # pending config에서 해당 도구 삭제 (즉시 적용되지는 않음)
-                del st.session_state.pending_mcp_config[tool_name]
-                st.success(
-                    f"{tool_name} 도구가 삭제되었습니다. 적용하려면 '적용하기' 버튼을 눌러주세요."
-                )
+                delete_tool(tool_name)  # 새로 만든 삭제 함수 호출
 
 # --- MCP 도구 설정 가져오기/내보내기 기능 추가 ---
 with st.sidebar.expander("도구 설정 가져오기/내보내기", expanded=False):
