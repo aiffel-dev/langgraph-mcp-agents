@@ -1,0 +1,133 @@
+name: MCP Agents Deploy
+
+on:
+  push:
+    branches:
+      - "main"
+
+env:
+  ENVIRONMENT: prd
+  PYTHON_ENV: prd
+  CPU: 1024
+  MEMORY: 2048
+  
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Configure AWS Credentials and Login to ECR
+        env:
+          AWS_ACCESS_KEY_ID: ${{ vars.AWS_ECS_DEPLOY_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_ECS_DEPLOY_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+        run: |
+          aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
+          aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
+          aws configure set region $AWS_REGION
+          aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+
+      - name: Set Environment Variables
+        run: |
+          TIMESTAMP=$(date +'%Y%m%d%H%M')
+          SHORT_SHA=$(echo $GITHUB_SHA | cut -c 1-7)
+          IMAGE_TAG=${{ env.ENVIRONMENT }}-$SHORT_SHA-$TIMESTAMP
+          LATEST_TAG=${{ env.ENVIRONMENT }}-latest
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
+          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
+
+      - name: Build, tag, and push Docker image to Amazon ECR
+        env:
+          REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+          REPOSITORY: ${{ secrets.IMAGE_REPO_NAME }}
+        run: |
+          docker build -t $REGISTRY/$REPOSITORY:${{ env.IMAGE_TAG }} -f Dockerfile .
+          docker tag $REGISTRY/$REPOSITORY:${{ env.IMAGE_TAG }} $REGISTRY/$REPOSITORY:${{ env.LATEST_TAG }}
+          docker push $REGISTRY/$REPOSITORY:${{ env.IMAGE_TAG }}
+          docker push $REGISTRY/$REPOSITORY:${{ env.LATEST_TAG }}
+
+      - name: Generate task-definition.json
+        env:
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          IMAGE_TAG: ${{ env.IMAGE_TAG }}
+          IMAGE_REPO_NAME: ${{ secrets.IMAGE_REPO_NAME }}
+          CONTAINER_NAME: ${{ secrets.CONTAINER_NAME }}
+          CONTAINER_PORT_MAIN: 8000
+          TASK_DEFINITION_FAMILY: ${{ secrets.TASK_DEFINITION_FAMILY }}-${{ env.ENVIRONMENT }}
+          PYTHON_ENV: ${{ env.PYTHON_ENV }}
+          CPU: ${{ env.CPU }}
+          MEMORY: ${{ env.MEMORY }}
+        run: |
+          sed -e 's|${AWS_REGION}|'"$AWS_REGION"'|g' \
+              -e 's|${AWS_ACCOUNT_ID}|'"$AWS_ACCOUNT_ID"'|g' \
+              -e 's|${IMAGE_TAG}|'"$IMAGE_TAG"'|g' \
+              -e 's|${IMAGE_REPO_NAME}|'"$IMAGE_REPO_NAME"'|g' \
+              -e 's|${CONTAINER_NAME}|'"$CONTAINER_NAME"'|g' \
+              -e 's|"${CONTAINER_PORT_MAIN}"|'"$CONTAINER_PORT_MAIN"'|g' \
+              -e 's|${TASK_DEFINITION_FAMILY}|'"$TASK_DEFINITION_FAMILY"'|g' \
+              -e 's|${PYTHON_ENV}|'"$PYTHON_ENV"'|g' \
+              -e 's|${CPU}|'"$CPU"'|g' \
+              -e 's|${MEMORY}|'"$MEMORY"'|g' \
+              deploy/task-definition.json > deploy/task-definition-temp.json
+
+      - name: Generate app-spec.yaml
+        env:
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          ECS_SERVICE_NAME: ${{ secrets.ECS_SERVICE_NAME }}-${{ env.ENVIRONMENT }}
+          ECS_VERSION: ${{ env.IMAGE_TAG }}
+          CONTAINER_NAME: ${{ secrets.CONTAINER_NAME }}
+          CONTAINER_PORT: 8000
+        run: |
+          sed -e 's|${AWS_REGION}|'"$AWS_REGION"'|g' \
+              -e 's|${AWS_ACCOUNT_ID}|'"$AWS_ACCOUNT_ID"'|g' \
+              -e 's|${ECS_SERVICE_NAME}|'"$ECS_SERVICE_NAME"'|g' \
+              -e 's|${ECS_VERSION}|'"$ECS_VERSION"'|g' \
+              -e 's|${CONTAINER_NAME}|'"$CONTAINER_NAME"'|g' \
+              -e 's|${CONTAINER_PORT}|'"$CONTAINER_PORT"'|g' \
+              deploy/app-spec.yaml > deploy/app-spec-temp.yaml
+
+      - name: Deploy service
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        env:
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}-${{ env.ENVIRONMENT }}
+          ECS_SERVICE_NAME: ${{ secrets.ECS_SERVICE_NAME }}-${{ env.ENVIRONMENT }}
+        with:
+          cluster: ${{ env.ECS_CLUSTER }}
+          service: ${{ env.ECS_SERVICE_NAME }}
+          task-definition: deploy/task-definition-temp.json
+          codedeploy-appspec: deploy/app-spec-temp.yaml
+          codedeploy-application: AppECS-${{ env.ECS_CLUSTER }}-${{ env.ECS_SERVICE_NAME }}
+          codedeploy-deployment-group: DgpECS-${{ env.ECS_CLUSTER }}-${{ env.ECS_SERVICE_NAME }}
+          wait-for-service-stability: true
+
+      - name: Cleanup files
+        run: |
+          rm -f deploy/task-definition-temp.json
+          rm -f deploy/app-spec-temp.yaml
+      
+      - name: action-slack
+        uses: 8398a7/action-slack@v3
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        with:
+          status: ${{ job.status }}
+          author_name: ${{ vars.ENVIRONMENT }} 환경
+          fields: repo,commit,message,author
+          mention: subteam^S06Q6NYBAKV
+          if_mention: failure,cancelled
+        if: always()
