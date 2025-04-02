@@ -17,3 +17,15 @@ wheels/
 
 # Data
 data/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars
+!terraform.tfvars.example
+.terraform.lock.hcl
+
+# Deployment files
+deploy/task-definition-*.json
+deploy/.env
