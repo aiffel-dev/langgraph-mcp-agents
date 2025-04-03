@@ -8,12 +8,11 @@ on:
 env:
   ENVIRONMENT: prd
   PYTHON_ENV: prd
-  CPU: 1024
-  MEMORY: 2048
-  
+
 
 jobs:
   deploy:
+    environment: prd
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -29,7 +28,7 @@ jobs:
 
       - name: Configure AWS Credentials and Login to ECR
         env:
-          AWS_ACCESS_KEY_ID: ${{ vars.AWS_ECS_DEPLOY_ACCESS_KEY_ID }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ECS_DEPLOY_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_ECS_DEPLOY_SECRET_ACCESS_KEY }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
           AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
@@ -68,8 +67,11 @@ jobs:
           CONTAINER_PORT_MAIN: 8000
           TASK_DEFINITION_FAMILY: ${{ secrets.TASK_DEFINITION_FAMILY }}-${{ env.ENVIRONMENT }}
           PYTHON_ENV: ${{ env.PYTHON_ENV }}
-          CPU: ${{ env.CPU }}
-          MEMORY: ${{ env.MEMORY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+          CPU: ${{ vars.CPU }}
+          MEMORY: ${{ vars.MEMORY }}
         run: |
           sed -e 's|${AWS_REGION}|'"$AWS_REGION"'|g' \
               -e 's|${AWS_ACCOUNT_ID}|'"$AWS_ACCOUNT_ID"'|g' \
@@ -79,6 +81,9 @@ jobs:
               -e 's|"${CONTAINER_PORT_MAIN}"|'"$CONTAINER_PORT_MAIN"'|g' \
               -e 's|${TASK_DEFINITION_FAMILY}|'"$TASK_DEFINITION_FAMILY"'|g' \
               -e 's|${PYTHON_ENV}|'"$PYTHON_ENV"'|g' \
+              -e 's|${ANTHROPIC_API_KEY}|'"$ANTHROPIC_API_KEY"'|g' \
+              -e 's|${OPENAI_API_KEY}|'"$OPENAI_API_KEY"'|g' \
+              -e 's|${TAVILY_API_KEY}|'"$TAVILY_API_KEY"'|g' \
               -e 's|${CPU}|'"$CPU"'|g' \
               -e 's|${MEMORY}|'"$MEMORY"'|g' \
               deploy/task-definition.json > deploy/task-definition-temp.json
