@@ -31,3 +31,5 @@ deploy/task-definition-*.json
 deploy/.env
 
 .cursor/
+keys/
+*.txt

@@ -2,54 +2,16 @@ import streamlit as st
 import asyncio
 import nest_asyncio
 import json
-import atexit
-import traceback
-import datetime
-import sys
 import os
-import psutil
 
-# 더 적극적인 nest_asyncio 설정
+# nest_asyncio 적용: 이미 실행 중인 이벤트 루프 내에서 중첩 호출 허용
 nest_asyncio.apply()
 
-# 전역 이벤트 루프 생성 및 재사용
+# 전역 이벤트 루프 생성 및 재사용 (한번 생성한 후 계속 사용)
 if "event_loop" not in st.session_state:
-    try:
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-    except Exception as e:
-        print(f"이벤트 루프 생성 중 오류: {e}")
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+    loop = asyncio.new_event_loop()
     st.session_state.event_loop = loop
-
-# 안전한 종료를 위한 설정
-def cleanup_resources():
-    if "mcp_client" in st.session_state and st.session_state.mcp_client is not None:
-        try:
-            if hasattr(st.session_state.mcp_client, "__aexit__"):
-                # 비동기 컨텍스트 매니저를 안전하게 종료
-                try:
-                    try:
-                        loop = asyncio.get_running_loop()
-                    except RuntimeError:
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-                    
-                    loop.run_until_complete(
-                        st.session_state.mcp_client.__aexit__(None, None, None)
-                    )
-                except Exception as e:
-                    print(f"동기 종료 중 오류: {e}")
-        except Exception as e:
-            print(f"MCP 클라이언트 종료 중 오류: {e}")
-            traceback.print_exc()
-
-# 프로그램 종료 시 리소스 정리
-atexit.register(cleanup_resources)
+    asyncio.set_event_loop(loop)
 
 from langgraph.prebuilt import create_react_agent
 from langchain_anthropic import ChatAnthropic
@@ -65,11 +27,78 @@ from langchain_core.runnables import RunnableConfig
 # 환경 변수 로드 (.env 파일에서 API 키 등의 설정을 가져옴)
 load_dotenv(override=True)
 
+
+def load_mcp_config_from_file(file_path="mcp.json"):
+    """
+    mcp.json 파일에서 MCP 도구 설정을 로드합니다.
+
+    매개변수:
+        file_path: MCP 설정 파일 경로 (기본값: mcp.json)
+
+    반환값:
+        dict: MCP 도구 설정 정보. 파일이 존재하지 않거나 오류 발생 시 기본 설정 반환
+    """
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+            return config
+    except FileNotFoundError:
+        # 파일이 없는 경우 기본 설정 반환
+        default_config = {
+            "weather": {
+                "command": "python",
+                "args": ["./mcp_server_local.py"],
+                "transport": "stdio",
+            }
+        }
+        # 파일이 없음을 알림
+        st.info(f"🔍 {file_path} 파일이 없어 기본 설정을 사용합니다.")
+        return default_config
+    except json.JSONDecodeError:
+        st.error(f"❌ {file_path} 파일의 JSON 형식이 올바르지 않습니다. 기본 설정을 사용합니다.")
+        return {
+            "weather": {
+                "command": "python",
+                "args": ["./mcp_server_local.py"],
+                "transport": "stdio",
+            }
+        }
+    except Exception as e:
+        st.error(f"❌ 설정 파일 로드 중 오류 발생: {str(e)}")
+        return {
+            "weather": {
+                "command": "python",
+                "args": ["./mcp_server_local.py"],
+                "transport": "stdio",
+            }
+        }
+
+
+def save_mcp_config_to_file(config, file_path="mcp.json"):
+    """
+    MCP 도구 설정을 mcp.json 파일에 저장합니다.
+
+    매개변수:
+        config: MCP 도구 설정 정보
+        file_path: MCP 설정 파일 경로 (기본값: mcp.json)
+
+    반환값:
+        bool: 저장 성공 여부
+    """
+    try:
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
+        return True
+    except Exception as e:
+        st.error(f"❌ 설정 파일 저장 중 오류 발생: {str(e)}")
+        return False
+
+
 # 페이지 설정: 제목, 아이콘, 레이아웃 구성
 st.set_page_config(page_title="Agent with MCP Tools", page_icon="🧠", layout="wide")
 
 # 사이드바 최상단에 저자 정보 추가 (다른 사이드바 요소보다 먼저 배치)
-st.sidebar.markdown("### 🚀 [smithery](https://smithery.ai/)")
+st.sidebar.markdown("### ✍️ Made by [테디노트](https://youtube.com/c/teddynote) 🚀")
 st.sidebar.divider()  # 구분선 추가
 
 # 기존 페이지 타이틀 및 설명
@@ -82,6 +111,14 @@ if "session_initialized" not in st.session_state:
     st.session_state.agent = None  # ReAct 에이전트 객체 저장 공간
     st.session_state.history = []  # 대화 기록 저장 리스트
     st.session_state.mcp_client = None  # MCP 클라이언트 객체 저장 공간
+    # mcp.json 파일에서 MCP 설정 로드
+    st.session_state.mcp_config = load_mcp_config_from_file()
+    # 파일이 없었던 경우 기본 설정을 저장
+    try:
+        if not os.path.exists("mcp.json"):
+            save_mcp_config_to_file(st.session_state.mcp_config)
+    except Exception as e:
+        st.error(f"설정 파일 저장 중 오류: {e}")
 
 if "thread_id" not in st.session_state:
     st.session_state.thread_id = random_uuid()
@@ -105,25 +142,6 @@ def print_message():
         elif message["role"] == "assistant_tool":
             with st.expander("🔧 도구 호출 정보", expanded=False):
                 st.markdown(message["content"])
-
-
-def delete_tool(tool_name):
-    """
-    도구를 삭제하고 UI를 업데이트합니다.
-    
-    매개변수:
-        tool_name: 삭제할 도구의 이름
-    """
-    # 도구 삭제
-    if tool_name in st.session_state.pending_mcp_config:
-        del st.session_state.pending_mcp_config[tool_name]
-        
-        # 삭제 성공 메시지를 위한 상태 설정
-        st.session_state.tool_deleted = True
-        st.session_state.deleted_tool_name = tool_name
-        
-        # UI를 즉시 새로고침하여 삭제된 도구가 목록에서 사라지게 함
-        st.rerun()
 
 
 def get_streaming_callback(text_placeholder, tool_placeholder):
@@ -196,42 +214,19 @@ async def process_query(query, text_placeholder, tool_placeholder, timeout_secon
                 get_streaming_callback(text_placeholder, tool_placeholder)
             )
             try:
-                # 이벤트 루프 확인
-                try:
-                    loop = asyncio.get_running_loop()
-                except RuntimeError:
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                
-                # 보다 견고한 예외 처리로 astream_graph 호출
-                try:
-                    response = await asyncio.wait_for(
-                        astream_graph(
-                            st.session_state.agent,
-                            {"messages": [HumanMessage(content=query)]},
-                            callback=streaming_callback,
-                            config=RunnableConfig(
-                                recursion_limit=100, thread_id=st.session_state.thread_id
-                            ),
+                response = await asyncio.wait_for(
+                    astream_graph(
+                        st.session_state.agent,
+                        {"messages": [HumanMessage(content=query)]},
+                        callback=streaming_callback,
+                        config=RunnableConfig(
+                            recursion_limit=100, thread_id=st.session_state.thread_id
                         ),
-                        timeout=timeout_seconds,
-                    )
-                except asyncio.TimeoutError:
-                    error_msg = f"⏱️ 요청 시간이 {timeout_seconds}초를 초과했습니다. 나중에 다시 시도해 주세요."
-                    return {"error": error_msg}, error_msg, ""
-                except Exception as streaming_error:
-                    # 스트리밍 에러지만 일부 응답이 있을 수 있음
-                    error_msg = f"❌ 응답 생성 중 오류: {str(streaming_error)}"
-                    text_placeholder.error(error_msg)
-                    final_text = "".join(accumulated_text_obj)
-                    final_tool = "".join(accumulated_tool_obj)
-                    
-                    # 일부 응답이 있으면 반환
-                    if final_text:
-                        return {"partial_response": True, "error": str(streaming_error)}, final_text, final_tool
-                    return {"error": error_msg}, error_msg, ""
-            except Exception as e:
-                error_msg = f"❌ 쿼리 처리 준비 중 오류: {str(e)}"
+                    ),
+                    timeout=timeout_seconds,
+                )
+            except asyncio.TimeoutError:
+                error_msg = f"⏱️ 요청 시간이 {timeout_seconds}초를 초과했습니다. 나중에 다시 시도해 주세요."
                 return {"error": error_msg}, error_msg, ""
 
             final_text = "".join(accumulated_text_obj)
@@ -262,27 +257,8 @@ async def initialize_session(mcp_config=None):
     """
     try:
         with st.spinner("🔄 MCP 서버에 연결 중..."):
-            # 기존 클라이언트 정리
-            if "mcp_client" in st.session_state and st.session_state.mcp_client is not None:
-                try:
-                    st.info("기존 MCP 클라이언트 종료 중...")
-                    try:
-                        loop = asyncio.get_running_loop()
-                    except RuntimeError:
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-                    
-                    loop.run_until_complete(
-                        st.session_state.mcp_client.__aexit__(None, None, None)
-                    )
-                    st.info("기존 MCP 클라이언트 종료 완료")
-                except Exception as e:
-                    st.error(f"기존 MCP 클라이언트 종료 중 오류: {e}")
-                    st.session_state.mcp_client = None
-
             if mcp_config is None:
                 # 기본 설정 사용
-                st.info("기본 MCP 설정을 사용합니다.")
                 mcp_config = {
                     "weather": {
                         "command": "python",
@@ -290,155 +266,42 @@ async def initialize_session(mcp_config=None):
                         "transport": "stdio",
                     },
                 }
-                
-            try:
-                # 클라이언트 생성 및 연결에 타임아웃 적용
-                from langchain_mcp_adapters.client import MultiServerMCPClient
-                
-                # 연결 시도 전 로깅
-                st.info(f"다음 MCP 도구에 연결 시도: {', '.join(mcp_config.keys())}")
-                
-                # 연결 재시도 메커니즘 추가
-                max_retries = 5  # 재시도 횟수 증가
-                retry_count = 0
-                backoff_factor = 1.5  # 지수 백오프 추가
-                
-                # 각 서버 연결에 대한 로그 추가
-                for server_name, config in mcp_config.items():
-                    transport = config.get("transport", "stdio")
-                    if transport == "stdio":
-                        command = config.get("command", "")
-                        args = config.get("args", [])
-                        st.info(f"[{server_name}] stdio 연결: {command} {' '.join(args[:2])}...")
-                    elif transport == "sse":
-                        url = config.get("url", "")
-                        st.info(f"[{server_name}] WebSocket 연결: {url}")
-                
-                while retry_count < max_retries:
-                    try:
-                        # 이벤트 루프 확인
-                        try:
-                            loop = asyncio.get_running_loop()
-                        except RuntimeError:
-                            loop = asyncio.new_event_loop()
-                            asyncio.set_event_loop(loop)
-                            
-                        st.info(f"MCP 클라이언트 초기화 시도 #{retry_count+1}/{max_retries}")
-                        
-                        # 프로세스 충돌 감지 및 정리
-                        current_pid = os.getpid()
-                        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
-                            try:
-                                if proc.info['pid'] != current_pid and 'npx' in str(proc.info['cmdline']):
-                                    for arg in proc.info['cmdline']:
-                                        if '@smithery' in str(arg) or 'desktop-commander' in str(arg):
-                                            st.warning(f"이전 MCP 서버 프로세스 감지: {proc.info['pid']} - 종료 중...")
-                                            try:
-                                                proc.terminate()
-                                            except Exception as e:
-                                                st.error(f"프로세스 종료 실패: {e}")
-                            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-                                pass
-                        
-                        # 클라이언트 생성 전 짧은 대기
-                        await asyncio.sleep(1)
-                        
-                        # 컨텍스트 관리자 방식으로 클라이언트 생성
-                        client = MultiServerMCPClient(mcp_config)
-                        
-                        # 비동기 초기화 상태 표시
-                        progress_placeholder = st.empty()
-                        progress_placeholder.info("클라이언트 컨텍스트 초기화 중...")
-                        
-                        # 타임아웃 및 예외 처리
-                        try:
-                            await asyncio.wait_for(client.__aenter__(), timeout=180)
-                            progress_placeholder.success("클라이언트 초기화 성공!")
-                            break
-                        except asyncio.TimeoutError:
-                            # 정리 시도
-                            try:
-                                await client.__aexit__(None, None, None)
-                            except Exception:
-                                pass
-                            progress_placeholder.error(f"⏱️ 클라이언트 초기화 타임아웃 (180초)")
-                            raise
-                    except (asyncio.TimeoutError, ConnectionError, Exception) as e:
-                        # 클라이언트 리소스 정리 시도
-                        if 'client' in locals():
-                            try:
-                                st.warning("클라이언트 리소스 정리 중...")
-                                await asyncio.shield(client.__aexit__(None, None, None))
-                            except Exception as cleanup_err:
-                                st.error(f"클라이언트 정리 오류: {cleanup_err}")
-                        
-                        retry_count += 1
-                        if retry_count >= max_retries:
-                            st.error(f"최대 재시도 횟수 초과: {str(e)}")
-                            if isinstance(e, Exception) and not isinstance(e, (asyncio.TimeoutError, ConnectionError)):
-                                st.error(f"예상치 못한 오류: {str(e)}")
-                                traceback.print_exc()
-                            raise
-                        wait_time = backoff_factor ** retry_count  # 지수 백오프
-                        st.warning(f"MCP 서버 연결 시도 {retry_count}/{max_retries} 실패: {str(e)}. {wait_time:.1f}초 후 재시도...")
-                        
-                        # 시스템 정리를 위한 추가 대기
-                        await asyncio.sleep(wait_time + 2)
-                
-                # 성공적으로 연결되면 도구 로드
-                st.info("도구 목록 로드 중...")
-                tools = client.get_tools()
-                st.session_state.tool_count = len(tools)
-                st.info(f"총 {len(tools)}개 도구를 찾았습니다.")
-                st.session_state.mcp_client = client
+            client = MultiServerMCPClient(mcp_config)
+            await client.__aenter__()
+            tools = client.get_tools()
+            st.session_state.tool_count = len(tools)
+            st.session_state.mcp_client = client
 
-                # 모델 및 에이전트 초기화
-                st.info("Claude 모델 초기화 중...")
-                from langchain_anthropic import ChatAnthropic
-                from langgraph.prebuilt import create_react_agent
-                from langgraph.checkpoint.memory import MemorySaver
-                
-                model = ChatAnthropic(
-                    model="claude-3-7-sonnet-latest", temperature=0.1, max_tokens=20000
-                )
-                
-                st.info("ReAct 에이전트 생성 중...")
-                agent = create_react_agent(
-                    model,
-                    tools,
-                    checkpointer=MemorySaver(),
-                    prompt="Use your tools to answer the question. Answer in Korean.",
-                )
-                st.session_state.agent = agent
-                st.session_state.session_initialized = True
-                return True
-            except Exception as e:
-                st.error(f"❌ MCP 클라이언트 초기화 오류: {e}")
-                traceback.print_exc()
-                return False
+            model = ChatAnthropic(
+                model="claude-3-7-sonnet-latest", temperature=0.1, max_tokens=20000
+            )
+            agent = create_react_agent(
+                model,
+                tools,
+                checkpointer=MemorySaver(),
+                prompt="Use your tools to answer the question. Answer in Korean.",
+            )
+            st.session_state.agent = agent
+            st.session_state.session_initialized = True
+            return True
     except Exception as e:
-        st.error(f"❌ 초기화 중 오류 발생: {e}")
-        traceback.print_exc()
+        st.error(f"❌ 초기화 중 오류 발생: {str(e)}")
+        import traceback
+
+        st.error(traceback.format_exc())
         return False
 
 
 # --- 사이드바 UI: MCP 도구 추가 인터페이스로 변경 ---
 with st.sidebar.expander("MCP 도구 추가", expanded=False):
-    default_config = """{
-  "weather": {
-    "command": "python",
-    "args": ["./mcp_server_local.py"],
-    "transport": "stdio"
-  }
-}"""
-    # pending config가 없으면 기존 mcp_config_text 기반으로 생성
+    # pending config가 없으면 세션 상태의 mcp_config 기반으로 생성
     if "pending_mcp_config" not in st.session_state:
         try:
-            st.session_state.pending_mcp_config = json.loads(
-                st.session_state.get("mcp_config_text", default_config)
-            )
+            st.session_state.pending_mcp_config = st.session_state.mcp_config.copy()
         except Exception as e:
             st.error(f"초기 pending config 설정 실패: {e}")
+            # 오류 발생 시 기본 설정 사용
+            st.session_state.pending_mcp_config = load_mcp_config_from_file()
 
     # 개별 도구 추가를 위한 UI
     st.subheader("개별 도구 추가")
@@ -556,6 +419,9 @@ with st.sidebar.expander("MCP 도구 추가", expanded=False):
                             st.success(
                                 f"총 {len(success_tools)}개 도구({tool_names})가 추가되었습니다. 적용하려면 '적용하기' 버튼을 눌러주세요."
                             )
+                        
+                        # mcp.json 파일에 변경사항 저장
+                        save_mcp_config_to_file(st.session_state.pending_mcp_config)
         except json.JSONDecodeError as e:
             st.error(f"JSON 파싱 에러: {e}")
             st.markdown(
@@ -581,13 +447,6 @@ with st.sidebar.expander("MCP 도구 추가", expanded=False):
 
 # --- 등록된 도구 목록 표시 및 삭제 버튼 추가 ---
 with st.sidebar.expander("등록된 도구 목록", expanded=True):
-    # 삭제 성공 메시지 표시
-    if "tool_deleted" in st.session_state and st.session_state.tool_deleted:
-        tool_name = st.session_state.deleted_tool_name
-        st.success(f"{tool_name} 도구가 삭제되었습니다. 적용하려면 '적용하기' 버튼을 눌러주세요.")
-        # 한 번만 표시하도록 상태 초기화
-        st.session_state.tool_deleted = False
-        
     try:
         pending_config = st.session_state.pending_mcp_config
     except Exception as e:
@@ -598,127 +457,13 @@ with st.sidebar.expander("등록된 도구 목록", expanded=True):
             col1, col2 = st.columns([8, 2])
             col1.markdown(f"- **{tool_name}**")
             if col2.button("삭제", key=f"delete_{tool_name}"):
-                delete_tool(tool_name)  # 새로 만든 삭제 함수 호출
-
-# --- MCP 도구 설정 가져오기/내보내기 기능 추가 ---
-with st.sidebar.expander("도구 설정 가져오기/내보내기", expanded=False):
-    st.markdown("### 도구 설정 내보내기")
-    if st.button("mcp.json 파일로 내보내기", key="export_button", use_container_width=True):
-        try:
-            # 현재 시간을 타임스탬프로 변환 (YYYYMMDD_HHMMSS 형식)
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            
-            # 현재 설정을 JSON 파일로 저장
-            mcp_config_json = json.dumps(st.session_state.pending_mcp_config, indent=2, ensure_ascii=False)
-            st.download_button(
-                label="파일 다운로드",
-                data=mcp_config_json,
-                file_name=f"mcp_{timestamp}.json",
-                mime="application/json",
-                key="download_json",
-                use_container_width=True,
-            )
-            st.success(f"✅ 설정을 내보낼 준비가 되었습니다. '파일 다운로드' 버튼을 클릭하여 저장하세요. (파일명: mcp_{timestamp}.json)")
-        except Exception as e:
-            st.error(f"❌ 내보내기 오류: {str(e)}")
-    
-    if st.button("현재 설정을 mcp.json에 저장", key="save_mcp_button", use_container_width=True):
-        try:
-            # 현재 시간을 타임스탬프로 변환 (YYYYMMDD_HHMMSS 형식)
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            
-            # 현재 설정을 mcp.json 파일로 저장
-            with open("mcp.json", "w", encoding="utf-8") as f:
-                json.dump(st.session_state.pending_mcp_config, f, indent=2, ensure_ascii=False)
-            
-            # 타임스탬프가 포함된 백업 파일도 함께 저장
-            with open(f"mcp_{timestamp}.json", "w", encoding="utf-8") as f:
-                json.dump(st.session_state.pending_mcp_config, f, indent=2, ensure_ascii=False)
-            
-            st.success(f"✅ 현재 설정이 mcp.json 파일과 백업 파일(mcp_{timestamp}.json)에 성공적으로 저장되었습니다.")
-        except Exception as e:
-            st.error(f"❌ 파일 저장 오류: {str(e)}")
-    
-    st.markdown("### 도구 설정 가져오기")
-    uploaded_file = st.file_uploader("mcp.json 파일 업로드", type=["json"], key="import_file")
-    if uploaded_file is not None:
-        try:
-            # 현재 시간을 타임스탬프로 변환 (YYYYMMDD_HHMMSS 형식)
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            
-            # 업로드된 JSON 파일 읽기
-            content = uploaded_file.read().decode("utf-8")
-            imported_config = json.loads(content)
-            
-            # 로그 파일에 가져온 설정 저장 (선택 사항)
-            try:
-                with open(f"imported_mcp_{timestamp}.log.json", "w", encoding="utf-8") as f:
-                    json.dump(imported_config, f, indent=2, ensure_ascii=False)
-            except Exception:
-                pass  # 로그 저장 실패는 무시
-            
-            # 가져온 설정 검증
-            valid_tools = []
-            invalid_tools = []
-            
-            for tool_name, tool_config in imported_config.items():
-                # 필수 필드 확인
-                if "url" in tool_config:
-                    tool_config["transport"] = "sse"
-                elif "transport" not in tool_config:
-                    tool_config["transport"] = "stdio"
-                
-                if ("command" not in tool_config and "url" not in tool_config) or \
-                   ("command" in tool_config and "args" not in tool_config) or \
-                   ("command" in tool_config and not isinstance(tool_config["args"], list)):
-                    invalid_tools.append(tool_name)
-                else:
-                    valid_tools.append(tool_name)
-            
-            # 유효한 도구 설정만 적용
-            for tool_name in valid_tools:
-                st.session_state.pending_mcp_config[tool_name] = imported_config[tool_name]
-            
-            # 결과 표시
-            if valid_tools:
-                tool_names = ", ".join(valid_tools)
-                st.success(f"✅ {len(valid_tools)}개 도구({tool_names})가 가져와졌습니다. 적용하려면 '적용하기' 버튼을 눌러주세요.")
-            
-            if invalid_tools:
-                tool_names = ", ".join(invalid_tools)
-                st.warning(f"⚠️ {len(invalid_tools)}개 도구({tool_names})는 유효하지 않아 가져오지 않았습니다.")
-                
-        except json.JSONDecodeError as e:
-            st.error(f"❌ JSON 파일 형식 오류: {str(e)}")
-        except Exception as e:
-            st.error(f"❌ 가져오기 오류: {str(e)}")
-            
-    if st.button("현재 mcp.json 로드", key="load_mcp_button", use_container_width=True):
-        try:
-            # 현재 시간을 타임스탬프로 변환 (YYYYMMDD_HHMMSS 형식)
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            
-            # mcp.json 파일 읽기
-            with open("mcp.json", "r", encoding="utf-8") as f:
-                file_config = json.load(f)
-            
-            # 설정 적용
-            st.session_state.pending_mcp_config = file_config
-            
-            # 로드 기록을 남기기 위해 로그 파일 작성 (선택 사항)
-            try:
-                with open(f"loaded_mcp_{timestamp}.log.json", "w", encoding="utf-8") as f:
-                    json.dump(file_config, f, indent=2, ensure_ascii=False)
-            except Exception:
-                pass  # 로그 저장 실패는 무시
-            
-            st.success(f"✅ mcp.json 파일이 성공적으로 로드되었습니다. ({timestamp}) 적용하려면 '적용하기' 버튼을 눌러주세요.")
-        except FileNotFoundError:
-            st.error("❌ mcp.json 파일을 찾을 수 없습니다.")
-        except json.JSONDecodeError as e:
-            st.error(f"❌ mcp.json 파일 파싱 오류: {str(e)}")
-        except Exception as e:
-            st.error(f"❌ 파일 로드 오류: {str(e)}")
+                # pending config에서 해당 도구 삭제 (즉시 적용되지는 않음)
+                del st.session_state.pending_mcp_config[tool_name]
+                # mcp.json 파일에 변경사항 저장
+                save_mcp_config_to_file(st.session_state.pending_mcp_config)
+                st.success(
+                    f"{tool_name} 도구가 삭제되었습니다. 적용하려면 '적용하기' 버튼을 눌러주세요."
+                )
 
 with st.sidebar:
 
@@ -736,9 +481,9 @@ with st.sidebar:
             progress_bar = st.progress(0)
 
             # 설정 저장
-            st.session_state.mcp_config_text = json.dumps(
-                st.session_state.pending_mcp_config, indent=2, ensure_ascii=False
-            )
+            st.session_state.mcp_config = st.session_state.pending_mcp_config.copy()
+            # mcp.json 파일에 변경사항 저장
+            save_result = save_mcp_config_to_file(st.session_state.mcp_config)
 
             # 세션 초기화 준비
             st.session_state.session_initialized = False
@@ -750,16 +495,21 @@ with st.sidebar:
 
             # 초기화 실행
             success = st.session_state.event_loop.run_until_complete(
-                initialize_session(st.session_state.pending_mcp_config)
+                initialize_session(st.session_state.mcp_config)
             )
 
             # 진행 상태 업데이트
             progress_bar.progress(100)
 
-            if success:
+            if success and save_result:
                 st.success("✅ 새로운 MCP 도구 설정이 적용되었습니다.")
             else:
-                st.error("❌ 새로운 MCP 도구 설정 적용에 실패하였습니다.")
+                error_msg = ""
+                if not save_result:
+                    error_msg += "설정 파일 저장에 실패했습니다.\n"
+                if not success:
+                    error_msg += "MCP 서버 초기화에 실패했습니다.\n"
+                st.error(f"❌ 새로운 MCP 도구 설정 적용에 실패하였습니다.\n{error_msg}")
 
         # 페이지 새로고침
         st.rerun()
@@ -768,7 +518,9 @@ with st.sidebar:
 # --- 기본 세션 초기화 (초기화되지 않은 경우) ---
 if not st.session_state.session_initialized:
     st.info("🔄 MCP 서버와 에이전트를 초기화합니다. 잠시만 기다려주세요...")
-    success = st.session_state.event_loop.run_until_complete(initialize_session())
+    success = st.session_state.event_loop.run_until_complete(
+        initialize_session(st.session_state.mcp_config)
+    )
     if success:
         st.success(
             f"✅ 초기화 완료! {st.session_state.tool_count}개의 도구가 로드되었습니다."
