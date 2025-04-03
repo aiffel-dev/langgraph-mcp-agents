@@ -2,13 +2,25 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install dependencies including CMake for building kiwipiepy
+# Install dependencies including CMake for building kiwipiepy and Node.js for npx
 RUN apt-get update && apt-get install -y \
     build-essential \
     git \
     curl \
     cmake \
+    gnupg \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js and npm
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get update \
+    && apt-get install -y nodejs \
+    && npm install -g npm@latest \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Verify Node.js and npm installation
+RUN node --version && npm --version && npx --version
 
 # Install pip-tools for better dependency management
 RUN pip install --no-cache-dir pip-tools

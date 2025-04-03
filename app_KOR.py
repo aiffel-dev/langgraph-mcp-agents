@@ -5,6 +5,9 @@ import json
 import atexit
 import traceback
 import datetime
+import sys
+import os
+import psutil
 
 # 더 적극적인 nest_asyncio 설정
 nest_asyncio.apply()
@@ -12,8 +15,13 @@ nest_asyncio.apply()
 # 전역 이벤트 루프 생성 및 재사용
 if "event_loop" not in st.session_state:
     try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+    except Exception as e:
+        print(f"이벤트 루프 생성 중 오류: {e}")
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
     st.session_state.event_loop = loop
@@ -24,22 +32,18 @@ def cleanup_resources():
         try:
             if hasattr(st.session_state.mcp_client, "__aexit__"):
                 # 비동기 컨텍스트 매니저를 안전하게 종료
-                if st.session_state.event_loop.is_running():
+                try:
                     try:
-                        future = asyncio.run_coroutine_threadsafe(
-                            st.session_state.mcp_client.__aexit__(None, None, None),
-                            st.session_state.event_loop
-                        )
-                        future.result(timeout=5)  # 최대 5초 대기
-                    except Exception as e:
-                        print(f"비동기 종료 중 오류: {e}")
-                else:
-                    try:
-                        st.session_state.event_loop.run_until_complete(
-                            st.session_state.mcp_client.__aexit__(None, None, None)
-                        )
-                    except Exception as e:
-                        print(f"동기 종료 중 오류: {e}")
+                        loop = asyncio.get_running_loop()
+                    except RuntimeError:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                    
+                    loop.run_until_complete(
+                        st.session_state.mcp_client.__aexit__(None, None, None)
+                    )
+                except Exception as e:
+                    print(f"동기 종료 중 오류: {e}")
         except Exception as e:
             print(f"MCP 클라이언트 종료 중 오류: {e}")
             traceback.print_exc()
@@ -65,7 +69,7 @@ load_dotenv(override=True)
 st.set_page_config(page_title="Agent with MCP Tools", page_icon="🧠", layout="wide")
 
 # 사이드바 최상단에 저자 정보 추가 (다른 사이드바 요소보다 먼저 배치)
-st.sidebar.markdown("### ✍️ Made by [테디노트](https://youtube.com/c/teddynote) 🚀")
+st.sidebar.markdown("### 🚀 [smithery](https://smithery.ai/)")
 st.sidebar.divider()  # 구분선 추가
 
 # 기존 페이지 타이틀 및 설명
@@ -192,19 +196,42 @@ async def process_query(query, text_placeholder, tool_placeholder, timeout_secon
                 get_streaming_callback(text_placeholder, tool_placeholder)
             )
             try:
-                response = await asyncio.wait_for(
-                    astream_graph(
-                        st.session_state.agent,
-                        {"messages": [HumanMessage(content=query)]},
-                        callback=streaming_callback,
-                        config=RunnableConfig(
-                            recursion_limit=100, thread_id=st.session_state.thread_id
+                # 이벤트 루프 확인
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                
+                # 보다 견고한 예외 처리로 astream_graph 호출
+                try:
+                    response = await asyncio.wait_for(
+                        astream_graph(
+                            st.session_state.agent,
+                            {"messages": [HumanMessage(content=query)]},
+                            callback=streaming_callback,
+                            config=RunnableConfig(
+                                recursion_limit=100, thread_id=st.session_state.thread_id
+                            ),
                         ),
-                    ),
-                    timeout=timeout_seconds,
-                )
-            except asyncio.TimeoutError:
-                error_msg = f"⏱️ 요청 시간이 {timeout_seconds}초를 초과했습니다. 나중에 다시 시도해 주세요."
+                        timeout=timeout_seconds,
+                    )
+                except asyncio.TimeoutError:
+                    error_msg = f"⏱️ 요청 시간이 {timeout_seconds}초를 초과했습니다. 나중에 다시 시도해 주세요."
+                    return {"error": error_msg}, error_msg, ""
+                except Exception as streaming_error:
+                    # 스트리밍 에러지만 일부 응답이 있을 수 있음
+                    error_msg = f"❌ 응답 생성 중 오류: {str(streaming_error)}"
+                    text_placeholder.error(error_msg)
+                    final_text = "".join(accumulated_text_obj)
+                    final_tool = "".join(accumulated_tool_obj)
+                    
+                    # 일부 응답이 있으면 반환
+                    if final_text:
+                        return {"partial_response": True, "error": str(streaming_error)}, final_text, final_tool
+                    return {"error": error_msg}, error_msg, ""
+            except Exception as e:
+                error_msg = f"❌ 쿼리 처리 준비 중 오류: {str(e)}"
                 return {"error": error_msg}, error_msg, ""
 
             final_text = "".join(accumulated_text_obj)
@@ -239,7 +266,15 @@ async def initialize_session(mcp_config=None):
             if "mcp_client" in st.session_state and st.session_state.mcp_client is not None:
                 try:
                     st.info("기존 MCP 클라이언트 종료 중...")
-                    await st.session_state.mcp_client.__aexit__(None, None, None)
+                    try:
+                        loop = asyncio.get_running_loop()
+                    except RuntimeError:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                    
+                    loop.run_until_complete(
+                        st.session_state.mcp_client.__aexit__(None, None, None)
+                    )
                     st.info("기존 MCP 클라이언트 종료 완료")
                 except Exception as e:
                     st.error(f"기존 MCP 클라이언트 종료 중 오류: {e}")
@@ -264,8 +299,9 @@ async def initialize_session(mcp_config=None):
                 st.info(f"다음 MCP 도구에 연결 시도: {', '.join(mcp_config.keys())}")
                 
                 # 연결 재시도 메커니즘 추가
-                max_retries = 3
+                max_retries = 5  # 재시도 횟수 증가
                 retry_count = 0
+                backoff_factor = 1.5  # 지수 백오프 추가
                 
                 # 각 서버 연결에 대한 로그 추가
                 for server_name, config in mcp_config.items():
@@ -280,8 +316,35 @@ async def initialize_session(mcp_config=None):
                 
                 while retry_count < max_retries:
                     try:
+                        # 이벤트 루프 확인
+                        try:
+                            loop = asyncio.get_running_loop()
+                        except RuntimeError:
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                            
                         st.info(f"MCP 클라이언트 초기화 시도 #{retry_count+1}/{max_retries}")
-                        client = MultiServerMCPClient(mcp_config)  # timeout 인자 제거
+                        
+                        # 프로세스 충돌 감지 및 정리
+                        current_pid = os.getpid()
+                        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                            try:
+                                if proc.info['pid'] != current_pid and 'npx' in str(proc.info['cmdline']):
+                                    for arg in proc.info['cmdline']:
+                                        if '@smithery' in str(arg) or 'desktop-commander' in str(arg):
+                                            st.warning(f"이전 MCP 서버 프로세스 감지: {proc.info['pid']} - 종료 중...")
+                                            try:
+                                                proc.terminate()
+                                            except Exception as e:
+                                                st.error(f"프로세스 종료 실패: {e}")
+                            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                                pass
+                        
+                        # 클라이언트 생성 전 짧은 대기
+                        await asyncio.sleep(1)
+                        
+                        # 컨텍스트 관리자 방식으로 클라이언트 생성
+                        client = MultiServerMCPClient(mcp_config)
                         
                         # 비동기 초기화 상태 표시
                         progress_placeholder = st.empty()
@@ -289,13 +352,26 @@ async def initialize_session(mcp_config=None):
                         
                         # 타임아웃 및 예외 처리
                         try:
-                            await asyncio.wait_for(client.__aenter__(), timeout=90)
+                            await asyncio.wait_for(client.__aenter__(), timeout=180)
                             progress_placeholder.success("클라이언트 초기화 성공!")
                             break
                         except asyncio.TimeoutError:
-                            progress_placeholder.error(f"⏱️ 클라이언트 초기화 타임아웃 (90초)")
+                            # 정리 시도
+                            try:
+                                await client.__aexit__(None, None, None)
+                            except Exception:
+                                pass
+                            progress_placeholder.error(f"⏱️ 클라이언트 초기화 타임아웃 (180초)")
                             raise
                     except (asyncio.TimeoutError, ConnectionError, Exception) as e:
+                        # 클라이언트 리소스 정리 시도
+                        if 'client' in locals():
+                            try:
+                                st.warning("클라이언트 리소스 정리 중...")
+                                await asyncio.shield(client.__aexit__(None, None, None))
+                            except Exception as cleanup_err:
+                                st.error(f"클라이언트 정리 오류: {cleanup_err}")
+                        
                         retry_count += 1
                         if retry_count >= max_retries:
                             st.error(f"최대 재시도 횟수 초과: {str(e)}")
@@ -303,9 +379,11 @@ async def initialize_session(mcp_config=None):
                                 st.error(f"예상치 못한 오류: {str(e)}")
                                 traceback.print_exc()
                             raise
-                        wait_time = 2 * retry_count  # 점점 더 오래 기다림
-                        st.warning(f"MCP 서버 연결 시도 {retry_count}/{max_retries} 실패: {str(e)}. {wait_time}초 후 재시도...")
-                        await asyncio.sleep(wait_time)
+                        wait_time = backoff_factor ** retry_count  # 지수 백오프
+                        st.warning(f"MCP 서버 연결 시도 {retry_count}/{max_retries} 실패: {str(e)}. {wait_time:.1f}초 후 재시도...")
+                        
+                        # 시스템 정리를 위한 추가 대기
+                        await asyncio.sleep(wait_time + 2)
                 
                 # 성공적으로 연결되면 도구 로드
                 st.info("도구 목록 로드 중...")

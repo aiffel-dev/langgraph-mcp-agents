@@ -29,3 +29,5 @@ data/
 # Deployment files
 deploy/task-definition-*.json
 deploy/.env
+
+.cursor/
