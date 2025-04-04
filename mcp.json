@@ -22,5 +22,17 @@
       "{\"databaseUrl\":\"postgresql://product_admin:ZrXYH4O7eiIphOy6xGL4uVyMcQKulNtwo8p2fhpW3LzYwN1Yw0dGP0TYQKIUgoPz@db-ro.modulabs.co.kr:5432/postgres\"}"
     ],
     "transport": "stdio"
+  },
+  "hn-server": {
+    "command": "npx",
+    "args": [
+      "-y",
+      "@smithery/cli@latest",
+      "run",
+      "@pskill9/hn-server",
+      "--key",
+      "bac5c00a-8316-4ad9-ae12-a0d36bc4603e"
+    ],
+    "transport": "stdio"
   }
 }

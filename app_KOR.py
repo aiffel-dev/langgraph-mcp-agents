@@ -3,6 +3,7 @@ import asyncio
 import nest_asyncio
 import json
 import os
+import atexit
 
 # nest_asyncio 적용: 이미 실행 중인 이벤트 루프 내에서 중첩 호출 허용
 nest_asyncio.apply()
@@ -12,6 +13,29 @@ if "event_loop" not in st.session_state:
     loop = asyncio.new_event_loop()
     st.session_state.event_loop = loop
     asyncio.set_event_loop(loop)
+
+# MCP 클라이언트 리소스 정리를 위한 함수
+async def cleanup_mcp_client():
+    """MCP 클라이언트를 안전하게 정리합니다."""
+    if st.session_state.get("mcp_client") is not None:
+        try:
+            await st.session_state.mcp_client.__aexit__(None, None, None)
+            st.session_state.mcp_client = None
+        except Exception as e:
+            print(f"MCP 클라이언트 종료 중 오류: {e}")
+
+# 앱 종료 시 MCP 클라이언트 정리 함수
+def cleanup_on_exit():
+    """Streamlit 앱 종료 시 리소스를 정리합니다."""
+    if "event_loop" in st.session_state and "mcp_client" in st.session_state and st.session_state.mcp_client is not None:
+        try:
+            st.session_state.event_loop.run_until_complete(cleanup_mcp_client())
+        except RuntimeError:
+            # 이벤트 루프가 이미 닫혔거나 실행 중이 아닐 경우 처리
+            pass
+
+# 종료 시 정리 함수 등록
+atexit.register(cleanup_on_exit)
 
 from langgraph.prebuilt import create_react_agent
 from langchain_anthropic import ChatAnthropic
@@ -234,6 +258,12 @@ async def process_query(query, text_placeholder, tool_placeholder, timeout_secon
                 get_streaming_callback(text_placeholder, tool_placeholder)
             )
             try:
+                # 이벤트 루프 설정 확인 및 재설정
+                try:
+                    asyncio.get_running_loop()
+                except RuntimeError:
+                    asyncio.set_event_loop(st.session_state.event_loop)
+                
                 response = await asyncio.wait_for(
                     astream_graph(
                         st.session_state.agent,
@@ -248,6 +278,12 @@ async def process_query(query, text_placeholder, tool_placeholder, timeout_secon
             except asyncio.TimeoutError:
                 error_msg = f"⏱️ 요청 시간이 {timeout_seconds}초를 초과했습니다. 나중에 다시 시도해 주세요."
                 return {"error": error_msg}, error_msg, ""
+            except RuntimeError as e:
+                if "no running event loop" in str(e):
+                    # 이벤트 루프 문제 - 세션 재초기화 필요
+                    error_msg = "🔄 이벤트 루프 오류가 발생했습니다. 페이지를 새로고침하여 다시 시도해주세요."
+                    return {"error": error_msg}, error_msg, ""
+                raise
 
             final_text = "".join(accumulated_text_obj)
             final_tool = "".join(accumulated_tool_obj)
@@ -276,6 +312,10 @@ async def initialize_session(mcp_config=None):
         bool: 초기화 성공 여부
     """
     try:
+        # 기존 MCP 클라이언트가 있으면 정리
+        if st.session_state.get("mcp_client") is not None:
+            await cleanup_mcp_client()
+            
         with st.spinner("🔄 MCP 서버에 연결 중..."):
             if mcp_config is None:
                 # 기본 설정 사용
@@ -302,6 +342,12 @@ async def initialize_session(mcp_config=None):
                     st.info(f"🔧 '{tool_name}' 도구의 {cmd_name} 경로를 조정합니다.")
                     adjusted_config[tool_name]["command"] = cmd_name
             
+            # 이벤트 루프 설정 확인 및 재설정
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                asyncio.set_event_loop(st.session_state.event_loop)
+                
             client = MultiServerMCPClient(adjusted_config)
             await client.__aenter__()
             tools = client.get_tools()
@@ -345,25 +391,6 @@ with st.sidebar.expander("MCP 도구 추가", expanded=False):
 
     # 개별 도구 추가를 위한 UI
     st.subheader("개별 도구 추가")
-    st.markdown(
-        """
-    **하나의 도구**를 JSON 형식으로 입력하세요:
-    
-    ```json
-    {
-      "도구이름": {
-        "command": "실행 명령어",
-        "args": ["인자1", "인자2", ...],
-        "transport": "stdio"
-      }
-    }
-    ```    
-    ⚠️ **중요**: 
-    - JSON을 반드시 중괄호(`{}`)로 감싸야 합니다.
-    - 명령어 경로는 절대 경로(`/opt/homebrew/bin/npx`) 대신 상대 경로(`npx`)를 사용하세요.
-    - Docker/ECS 환경에서는 Homebrew 경로(`/opt/homebrew/bin/`)를 사용할 수 없습니다.
-    """
-    )
 
     # 보다 명확한 예시 제공
     example_json = {
@@ -552,15 +579,41 @@ with st.sidebar:
             # 세션 초기화 준비
             st.session_state.session_initialized = False
             st.session_state.agent = None
-            st.session_state.mcp_client = None
-
+            
+            # 기존 MCP 클라이언트 정리
+            if st.session_state.get("mcp_client") is not None:
+                try:
+                    st.session_state.event_loop.run_until_complete(cleanup_mcp_client())
+                except RuntimeError:
+                    # 이벤트 루프 관련 오류 처리
+                    pass
+            
             # 진행 상태 업데이트
             progress_bar.progress(30)
 
+            # 이벤트 루프 설정 확인 및 재설정
+            try:
+                asyncio.get_event_loop()
+            except RuntimeError:
+                asyncio.set_event_loop(st.session_state.event_loop)
+                
             # 초기화 실행
-            success = st.session_state.event_loop.run_until_complete(
-                initialize_session(st.session_state.mcp_config)
-            )
+            try:
+                success = st.session_state.event_loop.run_until_complete(
+                    initialize_session(st.session_state.mcp_config)
+                )
+            except RuntimeError as e:
+                if "no running event loop" in str(e):
+                    # 이벤트 루프 문제 발생 시 새로운 루프 생성 후 재시도
+                    st.warning("이벤트 루프 문제가 감지되어 재설정합니다...")
+                    loop = asyncio.new_event_loop()
+                    st.session_state.event_loop = loop
+                    asyncio.set_event_loop(loop)
+                    success = loop.run_until_complete(
+                        initialize_session(st.session_state.mcp_config)
+                    )
+                else:
+                    raise
 
             # 진행 상태 업데이트
             progress_bar.progress(100)
@@ -582,9 +635,29 @@ with st.sidebar:
 # --- 기본 세션 초기화 (초기화되지 않은 경우) ---
 if not st.session_state.session_initialized:
     st.info("🔄 MCP 서버와 에이전트를 초기화합니다. 잠시만 기다려주세요...")
-    success = st.session_state.event_loop.run_until_complete(
-        initialize_session(st.session_state.mcp_config)
-    )
+    try:
+        # 이벤트 루프 설정 확인 및 재설정
+        try:
+            asyncio.get_event_loop()
+        except RuntimeError:
+            asyncio.set_event_loop(st.session_state.event_loop)
+            
+        success = st.session_state.event_loop.run_until_complete(
+            initialize_session(st.session_state.mcp_config)
+        )
+    except RuntimeError as e:
+        if "no running event loop" in str(e):
+            # 이벤트 루프 문제 발생 시 새로운 루프 생성 후 재시도
+            loop = asyncio.new_event_loop()
+            st.session_state.event_loop = loop
+            asyncio.set_event_loop(loop)
+            success = loop.run_until_complete(
+                initialize_session(st.session_state.mcp_config)
+            )
+        else:
+            st.error(f"❌ 초기화 중 오류 발생: {str(e)}")
+            success = False
+    
     if success:
         st.success(
             f"✅ 초기화 완료! {st.session_state.tool_count}개의 도구가 로드되었습니다."
@@ -634,7 +707,9 @@ with st.sidebar:
     st.divider()
 
     # 사이드바 최하단에 대화 초기화 버튼 추가
-    if st.button("🔄 대화 초기화", use_container_width=True, type="primary"):
+    col1, col2 = st.columns(2)
+    
+    if col1.button("🔄 대화 초기화", use_container_width=True):
         # thread_id 초기화
         st.session_state.thread_id = random_uuid()
 
@@ -644,5 +719,23 @@ with st.sidebar:
         # 알림 메시지
         st.success("✅ 대화가 초기화되었습니다.")
 
+        # 페이지 새로고침
+        st.rerun()
+        
+    if col2.button("🔄 서버 재연결", use_container_width=True):
+        st.warning("🔄 MCP 서버에 재연결 중...")
+        
+        # 세션 초기화 준비
+        st.session_state.session_initialized = False
+        st.session_state.agent = None
+        
+        # 기존 MCP 클라이언트 정리
+        if st.session_state.get("mcp_client") is not None:
+            try:
+                st.session_state.event_loop.run_until_complete(cleanup_mcp_client())
+            except RuntimeError:
+                # 이벤트 루프 관련 오류 처리
+                pass
+        
         # 페이지 새로고침
         st.rerun()
