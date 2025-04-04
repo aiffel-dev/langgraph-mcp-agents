@@ -411,26 +411,6 @@ with st.sidebar.expander("MCP 도구 추가", expanded=False):
     default_text = json.dumps(example_json, indent=2, ensure_ascii=False)
 
     # Docker 환경에서 작동하는 Slack 예제 추가
-    st.info("""
-    📝 **Slack 도구 예제** (Docker/ECS 환경에서 작동):
-    ```json
-    {
-      "slack": {
-        "command": "npx",
-        "args": [
-          "-y",
-          "@modelcontextprotocol/server-slack"
-        ],
-        "env": {
-          "SLACK_BOT_TOKEN": "xoxb-your-token-here",
-          "SLACK_TEAM_ID": "your-team-id"
-        },
-        "transport": "stdio"
-      }
-    }
-    ```
-    """)
-
     new_tool_json = st.text_area(
         "도구 JSON",
         default_text,
