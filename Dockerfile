@@ -44,5 +44,7 @@ ENV PYTHONUNBUFFERED=1
 # 건강 체크 확인용 헬스체크 파일 추가
 # RUN echo "OK" > /app/health.txt
 
+COPY mcp.json /app/mcp.json
+
 EXPOSE 8000
 CMD ["streamlit", "run", "app_KOR.py", "--server.address", "0.0.0.0", "--server.port", "8000"] 
