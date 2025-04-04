@@ -12,7 +12,7 @@
     "transport": "stdio"
   },
   "postgres": {
-    "command": "/opt/homebrew/bin/npx",
+    "command": "npx",
     "args": [
       "-y",
       "@smithery/cli@latest",

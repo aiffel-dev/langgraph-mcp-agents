@@ -113,6 +113,26 @@ if "session_initialized" not in st.session_state:
     st.session_state.mcp_client = None  # MCP 클라이언트 객체 저장 공간
     # mcp.json 파일에서 MCP 설정 로드
     st.session_state.mcp_config = load_mcp_config_from_file()
+    
+    # Homebrew 경로 문제 자동 감지 및 수정
+    need_update = False
+    for tool_name, tool_config in st.session_state.mcp_config.items():
+        if "command" in tool_config and "/opt/homebrew" in tool_config["command"]:
+            # Homebrew 경로를 사용하는 명령어 발견
+            original_cmd = tool_config["command"]
+            cmd_name = original_cmd.split("/")[-1]
+            st.session_state.mcp_config[tool_name]["command"] = cmd_name
+            need_update = True
+            st.info(f"🔧 '{tool_name}' 도구의 명령어 경로를 '{original_cmd}'에서 '{cmd_name}'으로 자동 변경했습니다.")
+    
+    # 변경된 경우 설정 파일 업데이트
+    if need_update:
+        save_result = save_mcp_config_to_file(st.session_state.mcp_config)
+        if save_result:
+            st.success("✅ Docker 환경 호환성을 위해 설정 파일이 자동으로 수정되었습니다.")
+        else:
+            st.warning("⚠️ 설정 파일 수정에 실패했습니다. 수동으로 경로를 수정해주세요.")
+    
     # 파일이 없었던 경우 기본 설정을 저장
     try:
         if not os.path.exists("mcp.json"):
@@ -266,7 +286,23 @@ async def initialize_session(mcp_config=None):
                         "transport": "stdio",
                     },
                 }
-            client = MultiServerMCPClient(mcp_config)
+            
+            # Docker/ECS 환경을 위한 npx 경로 조정
+            adjusted_config = mcp_config.copy()
+            for tool_name, tool_config in mcp_config.items():
+                # npx 명령어 경로 변경이 필요한 경우 처리
+                if tool_config.get("command") == "/opt/homebrew/bin/npx":
+                    st.info(f"🔧 '{tool_name}' 도구의 npx 경로를 조정합니다.")
+                    # 먼저 'npx'가 시스템에 있는지 확인 (상대경로)
+                    adjusted_config[tool_name]["command"] = "npx"
+                elif "command" in tool_config and "/opt/homebrew" in tool_config["command"]:
+                    # 다른 Homebrew 경로를 가진 명령어도 조정
+                    original_cmd = tool_config["command"]
+                    cmd_name = original_cmd.split("/")[-1]
+                    st.info(f"🔧 '{tool_name}' 도구의 {cmd_name} 경로를 조정합니다.")
+                    adjusted_config[tool_name]["command"] = cmd_name
+            
+            client = MultiServerMCPClient(adjusted_config)
             await client.__aenter__()
             tools = client.get_tools()
             st.session_state.tool_count = len(tools)
@@ -289,6 +325,10 @@ async def initialize_session(mcp_config=None):
         import traceback
 
         st.error(traceback.format_exc())
+        # 특정 오류에 대한 추가 정보 제공
+        if "No such file or directory" in str(e) and "npx" in str(e):
+            st.warning("⚠️ npx 경로 문제가 발생했습니다. 도구 설정의 경로를 확인하세요.")
+            st.info("💡 Docker 환경에서는 '/opt/homebrew/bin/npx' 대신 'npx'를 사용하세요.")
         return False
 
 
@@ -318,7 +358,10 @@ with st.sidebar.expander("MCP 도구 추가", expanded=False):
       }
     }
     ```    
-    ⚠️ **중요**: JSON을 반드시 중괄호(`{}`)로 감싸야 합니다.
+    ⚠️ **중요**: 
+    - JSON을 반드시 중괄호(`{}`)로 감싸야 합니다.
+    - 명령어 경로는 절대 경로(`/opt/homebrew/bin/npx`) 대신 상대 경로(`npx`)를 사용하세요.
+    - Docker/ECS 환경에서는 Homebrew 경로(`/opt/homebrew/bin/`)를 사용할 수 없습니다.
     """
     )
 
@@ -339,6 +382,27 @@ with st.sidebar.expander("MCP 도구 추가", expanded=False):
     }
 
     default_text = json.dumps(example_json, indent=2, ensure_ascii=False)
+
+    # Docker 환경에서 작동하는 Slack 예제 추가
+    st.info("""
+    📝 **Slack 도구 예제** (Docker/ECS 환경에서 작동):
+    ```json
+    {
+      "slack": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "@modelcontextprotocol/server-slack"
+        ],
+        "env": {
+          "SLACK_BOT_TOKEN": "xoxb-your-token-here",
+          "SLACK_TEAM_ID": "your-team-id"
+        },
+        "transport": "stdio"
+      }
+    }
+    ```
+    """)
 
     new_tool_json = st.text_area(
         "도구 JSON",
