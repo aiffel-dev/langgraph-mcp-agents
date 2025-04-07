@@ -23,15 +23,29 @@
     ],
     "transport": "stdio"
   },
-  "hn-server": {
+  "bigquery": {
+    "command": "npx",
+    "args": [
+      "-y",
+      "@ergut/mcp-bigquery-server",
+      "--project-id",
+      "modulabs-ga-workspace",
+      "--location",
+      "asia-northeast3",
+      "--key-file",
+      "/Users/sunu/PycharmProjects/langgraph-mcp-agents/keys/modulabs-ga-workspace-b13b52ad1882.json"
+    ],
+    "transport": "stdio"
+  },
+  "veyrax-mcp": {
     "command": "npx",
     "args": [
       "-y",
       "@smithery/cli@latest",
       "run",
-      "@pskill9/hn-server",
-      "--key",
-      "bac5c00a-8316-4ad9-ae12-a0d36bc4603e"
+      "@VeyraX/veyrax-mcp",
+      "--config",
+      "{\"VEYRAX_API_KEY\":\"vrx-925749d8f9d553bdec758202b821938f2b9529e3\"}"
     ],
     "transport": "stdio"
   }
