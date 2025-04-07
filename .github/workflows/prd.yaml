@@ -70,6 +70,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+          GCP_BIGQUERY_KEY: ${{ secrets.GCP_BIGQUERY_KEY }}
           CPU: ${{ vars.CPU }}
           MEMORY: ${{ vars.MEMORY }}
         run: |
@@ -84,6 +85,7 @@ jobs:
               -e 's|${ANTHROPIC_API_KEY}|'"$ANTHROPIC_API_KEY"'|g' \
               -e 's|${OPENAI_API_KEY}|'"$OPENAI_API_KEY"'|g' \
               -e 's|${TAVILY_API_KEY}|'"$TAVILY_API_KEY"'|g' \
+              -e 's|${GCP_BIGQUERY_KEY}|'"$GCP_BIGQUERY_KEY"'|g' \
               -e 's|${CPU}|'"$CPU"'|g' \
               -e 's|${MEMORY}|'"$MEMORY"'|g' \
               deploy/task-definition.json > deploy/task-definition-temp.json

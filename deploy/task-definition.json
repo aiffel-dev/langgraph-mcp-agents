@@ -33,6 +33,10 @@
         {
           "name": "TAVILY_API_KEY",
           "valueFrom": "arn:aws:secretsmanager:${AWS_REGION}:${AWS_ACCOUNT_ID}:secret:${TAVILY_API_KEY}"
+        },
+        {
+          "name": "GCP_BIGQUERY_KEY",
+          "valueFrom": "arn:aws:secretsmanager:${AWS_REGION}:${AWS_ACCOUNT_ID}:secret:${GCP_BIGQUERY_KEY}"
         }
       ],
       "portMappings": [

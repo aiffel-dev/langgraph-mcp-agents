@@ -32,8 +32,8 @@
       "modulabs-ga-workspace",
       "--location",
       "asia-northeast3",
-      "--key-file",
-      "/Users/sunu/PycharmProjects/langgraph-mcp-agents/keys/modulabs-ga-workspace-b13b52ad1882.json"
+      "--key-json",
+      "${GCP_BIGQUERY_KEY}"
     ],
     "transport": "stdio"
   },
