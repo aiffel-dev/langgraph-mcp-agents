@@ -23,20 +23,6 @@
     ],
     "transport": "stdio"
   },
-  "bigquery": {
-    "command": "npx",
-    "args": [
-      "-y",
-      "@ergut/mcp-bigquery-server",
-      "--project-id",
-      "modulabs-ga-workspace",
-      "--location",
-      "asia-northeast3",
-      "--key-json",
-      "${GCP_BIGQUERY_KEY}"
-    ],
-    "transport": "stdio"
-  },
   "veyrax-mcp": {
     "command": "npx",
     "args": [

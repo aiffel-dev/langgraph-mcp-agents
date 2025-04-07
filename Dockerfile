@@ -47,4 +47,5 @@ ENV PYTHONUNBUFFERED=1
 COPY mcp_config.json /app/mcp_config.json
 
 EXPOSE 8000
+
 CMD ["streamlit", "run", "app_KOR.py", "--server.address", "0.0.0.0", "--server.port", "8000"] 
