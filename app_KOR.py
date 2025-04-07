@@ -8,16 +8,6 @@ import atexit
 # nest_asyncio 적용: 이미 실행 중인 이벤트 루프 내에서 중첩 호출 허용
 nest_asyncio.apply()
 
-# 모듈 구조 개선을 위한 구성
-# 이 파일은 다음과 같이 모듈화될 수 있습니다:
-# - utils/
-#   - mcp_config.py: MCP 설정 관리 함수
-#   - async_utils.py: 비동기 관련 유틸리티 함수
-#   - ui_components.py: UI 구성요소 함수들
-# - agent/
-#   - agent_manager.py: 에이전트 초기화 및 관리
-#   - message_processor.py: 메시지 처리 및 스트리밍
-
 # 전역 이벤트 루프 생성 및 재사용 (한번 생성한 후 계속 사용)
 if "event_loop" not in st.session_state:
     loop = asyncio.new_event_loop()
